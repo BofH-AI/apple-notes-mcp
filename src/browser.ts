@@ -14,6 +14,23 @@ const ICLOUD_NOTES_URL = "https://www.icloud.com/notes/";
 export class BrowserManager {
   private ctx: BrowserContext | null = null;
   private page: Page | null = null;
+  private _lockChain: Promise<void> = Promise.resolve();
+
+  /** Serialize all browser operations — prevents concurrent tool calls from racing. */
+  async withLock<T>(fn: () => Promise<T>): Promise<T> {
+    let release!: () => void;
+    const next = new Promise<void>((res) => { release = res; });
+    const prev = this._lockChain;
+    this._lockChain = next;
+    await prev;
+    log("withLock() acquired");
+    try {
+      return await fn();
+    } finally {
+      log("withLock() released");
+      release();
+    }
+  }
 
   async getPage(): Promise<Page> {
     if (this.page && !this.page.isClosed()) {

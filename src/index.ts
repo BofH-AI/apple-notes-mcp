@@ -156,6 +156,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }))
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
   const { name, arguments: args = {} } = request.params;
 
+  return browser.withLock(async () => {
   try {
     let result: string;
 
@@ -270,6 +271,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       isError: true,
     };
   }
+  }); // withLock
 });
 
 // Gracefully close the browser when the server exits
