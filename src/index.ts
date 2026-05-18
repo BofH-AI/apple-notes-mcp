@@ -13,7 +13,6 @@ import {
   createNote,
   updateNote,
   searchNotes,
-  deleteNote,
   debugPage,
 } from "./notes.js";
 
@@ -127,23 +126,6 @@ const TOOLS: Tool[] = [
       "Use this when other tools fail to find notes.",
     inputSchema: { type: "object", properties: {} },
   },
-  {
-    name: "delete_note",
-    description: "Delete (move to trash) an Apple Note.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        title: {
-          type: "string",
-          description: "Note title (partial match). Use this OR index.",
-        },
-        index: {
-          type: "number",
-          description: "Zero-based position in the notes list. Use this OR title.",
-        },
-      },
-    },
-  },
 ];
 
 const server = new Server(
@@ -247,15 +229,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
       case "debug_page": {
         result = await debugPage();
-        break;
-      }
-
-      case "delete_note": {
-        const titleOrIndex = args.title ?? args.index;
-        if (titleOrIndex == null) {
-          throw new Error("Provide either 'title' (string) or 'index' (number).");
-        }
-        result = await deleteNote(titleOrIndex as string | number);
         break;
       }
 
