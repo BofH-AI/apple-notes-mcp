@@ -413,31 +413,54 @@ export async function updateNote(
 
 export async function searchNotes(query: string): Promise<NoteListItem[]> {
   const frame = await requireFrame();
+  log(`searchNotes() query="${query}"`);
 
-  const focused = await frame.evaluate((q) => {
-    const input = document.querySelector(
-      'input[type="search"], input[placeholder*="earch"], input[aria-label*="earch"]'
-    ) as HTMLInputElement | null;
-    if (!input) return false;
-    input.focus();
-    input.value = q;
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-    return true;
-  }, query);
+  // Use trusted Playwright fill() + keyboard so iCloud registers the input
+  const searchInput = frame.locator(
+    'input[type="search"], input[placeholder*="earch"], input[aria-label*="earch"]'
+  ).first();
 
-  if (!focused) throw new Error("Search input not found. Run debug_page to inspect selectors.");
+  try {
+    await searchInput.waitFor({ state: "visible", timeout: 8_000 });
+  } catch {
+    throw new Error("Search input not found. Run debug_page to inspect selectors.");
+  }
 
-  await frame.waitForTimeout(2000);
-  const results = await listNotes(30);
+  await searchInput.click();
+  await searchInput.fill(query);
+  await frame.page().keyboard.press("Enter");
+  log(`searchNotes() filled search input, waiting for results`);
 
-  // Clear search
-  await frame.evaluate(() => {
-    const input = document.querySelector(
-      'input[type="search"], input[placeholder*="earch"]'
-    ) as HTMLInputElement | null;
-    if (input) { input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true })); }
-  });
+  // Wait for the note list to update with filtered results
+  await frame.waitForTimeout(2500);
+
+  // Harvest whatever is in the list (iCloud has filtered it)
+  const results = await frame.evaluate(async ({ maxItems }) => {
+    const seen = new Map<string, { title: string; preview: string; date: string; index: number }>();
+    const harvest = () => {
+      document.querySelectorAll("div.note-list-item-title").forEach((titleEl) => {
+        const title = titleEl.textContent?.trim() ?? "";
+        if (!title || seen.has(title)) return;
+        let container: Element | null = titleEl.parentElement;
+        for (let i = 0; i < 6; i++) {
+          if (container?.querySelector("div.note-list-item-snippet")) break;
+          container = container?.parentElement ?? null;
+        }
+        const preview = container?.querySelector("div.note-list-item-snippet")?.textContent?.trim() ?? "";
+        const date = container?.querySelector("div.note-list-item-date")?.textContent?.trim() ?? "";
+        seen.set(title, { title, preview, date, index: seen.size });
+      });
+    };
+    harvest();
+    return Array.from(seen.values()).slice(0, maxItems);
+  }, { maxItems: 30 });
+
+  log(`searchNotes() found ${results.length} results`);
+
+  // Clear search with trusted events so iCloud restores the full list
+  await searchInput.clear();
+  await frame.page().keyboard.press("Escape");
+  await frame.waitForTimeout(500);
 
   return results;
 }
