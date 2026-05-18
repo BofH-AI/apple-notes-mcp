@@ -127,6 +127,11 @@ export class BrowserManager {
   get profileDir(): string {
     return PROFILE_DIR;
   }
+
+  /** True only if the browser is already running — doesn't launch it. */
+  get isRunning(): boolean {
+    return this.ctx !== null && this.page !== null && !this.page.isClosed();
+  }
 }
 
 export const browser = new BrowserManager();

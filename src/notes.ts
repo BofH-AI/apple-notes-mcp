@@ -290,20 +290,21 @@ export async function createNote(content: string): Promise<string> {
   const frame = await requireFrame();
   const page = frame.page();
 
-  // Capture URL before clicking so the waitForFunction race is avoided
   const prevUrl = page.url();
 
-  // Try trusted click on the compose/new-note button (class confirmed: "compose cw-button")
+  // Trusted click on the compose button via boundingBox (same pattern as clickNoteEval).
   const newNoteBtn = frame.locator(
     '[class*="compose"][class*="cw-button"], button[title*="Create a note"], button[aria-label*="New Note"], [class*="new-note"]'
   ).first();
-  const btnVisible = await newNoteBtn.isVisible().catch(() => false);
+  const btnBBox = await newNoteBtn.boundingBox().catch(() => null);
 
-  if (btnVisible) {
-    log("createNote() clicking New Note button");
-    await newNoteBtn.click();
+  if (btnBBox && btnBBox.width > 0) {
+    const cx = btnBBox.x + btnBBox.width / 2;
+    const cy = btnBBox.y + btnBBox.height / 2;
+    log(`createNote() trusted-clicking compose button at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
+    await page.mouse.click(cx, cy);
   } else {
-    log("createNote() button not found, clicking note list then Ctrl+N");
+    log("createNote() button bbox not found, clicking note list then Ctrl+N");
     await frame.locator("div.note-list-item-title").first().click().catch(() => {});
     await page.waitForTimeout(500);
     await page.keyboard.press("Control+n");
@@ -315,25 +316,86 @@ export async function createNote(content: string): Promise<string> {
     prevUrl,
     { timeout: 8_000 }
   ).catch(() => log("createNote() URL didn't change after new note trigger"));
-  log(`createNote() URL after new note: ${page.url()}`);
+  const newNoteUrl = page.url();
+  log(`createNote() new note URL: ${newNoteUrl}`);
 
-  // Give the canvas editor time to initialize for the new note
-  await page.waitForTimeout(3000);
+  // After compose the note is selected in the list but the editor doesn't have keyboard focus.
+  // Click the correct list item to transfer focus. We identify the right item by searching
+  // each list item's innerHTML for the note ID from newNoteUrl — it's base64 and unique.
+  // Fall back to the topmost visible list item by y-position if no ID match is found.
+  await page.waitForTimeout(1500);
 
-  // Click the title area (top 25%) of the editor — for a new empty note, iCloud places
-  // the canvas cursor in the title area, not the body. Clicking center misses the focused area.
-  const editorBBox = await frame.locator("div.notes-note-editor-view-controller").boundingBox();
-  if (editorBBox && editorBBox.width > 0) {
-    const cx = editorBBox.x + editorBBox.width / 2;
-    const cy = editorBBox.y + editorBBox.height * 0.15;
-    log(`createNote() clicking editor title area at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
-    await page.mouse.click(cx, cy);
+  const iframeEl = await frame.frameElement();
+  const iframeBBox = await iframeEl.boundingBox();
+  const iframeX = iframeBBox?.x ?? 0;
+  const iframeY = iframeBBox?.y ?? 0;
+  log(`createNote() iframe offset (${iframeX.toFixed(0)}, ${iframeY.toFixed(0)})`);
+
+  const noteId = newNoteUrl.split("/").pop() ?? "";
+  log(`createNote() searching list for note ID: ${noteId.slice(0, 24)}...`);
+
+  const listCoords = await frame.evaluate((id) => {
+    let byId: { cx: number; cy: number; title: string } | null = null;
+    let byTop: { cx: number; cy: number; title: string; top: number } | null = null;
+
+    for (const item of document.querySelectorAll("div.list-item")) {
+      const rect = item.getBoundingClientRect();
+      if (rect.width === 0 || rect.top < 0 || rect.bottom > window.innerHeight) continue;
+      const cx = rect.left + rect.width / 2;
+      const cy = rect.top + rect.height / 2;
+      const title = item.querySelector("div.note-list-item-title")?.textContent?.trim() ?? "";
+
+      if (!byId && item.innerHTML.includes(id)) {
+        byId = { cx, cy, title };
+      }
+      if (!byTop || rect.top < byTop.top) {
+        byTop = { cx, cy, title, top: rect.top };
+      }
+    }
+
+    if (byId) return { ...byId, method: "byId" };
+    if (byTop) return { ...byTop, method: "byTop" };
+    return null;
+  }, noteId);
+
+  if (listCoords) {
+    const pageX = iframeX + listCoords.cx;
+    const pageY = iframeY + listCoords.cy;
+    log(`createNote() clicking list item (${listCoords.method}, title="${listCoords.title}") at page (${pageX.toFixed(0)}, ${pageY.toFixed(0)})`);
+    await page.mouse.click(pageX, pageY);
+  } else {
+    log("createNote() no visible list item found, skipping list click");
   }
 
-  // Wait for click to register before pasting (same gap used in getNote)
+  // Confirm we're on the right note
+  await page.waitForFunction(
+    (url: string) => window.location.href === url,
+    newNoteUrl,
+    { timeout: 5_000 }
+  ).catch(() => log(`createNote() WARNING: URL after list click is ${page.url()}, expected ${newNoteUrl}`));
+  log(`createNote() URL after list click: ${page.url()}`);
+
+  // Give the canvas editor time to render
+  await page.waitForTimeout(4000);
+
+  // Click the editor center to grab focus (same as updateNote / getNote)
+  const editorBBox = await frame.locator("div.notes-note-editor-view-controller").boundingBox();
+  if (editorBBox && editorBBox.width > 0 && editorBBox.height > 0) {
+    const cx = editorBBox.x + editorBBox.width / 2;
+    const cy = editorBBox.y + editorBBox.height / 2;
+    log(`createNote() clicking editor center at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
+    await page.mouse.click(cx, cy);
+  } else {
+    log(`createNote() editor bbox not found: ${JSON.stringify(editorBBox)}`);
+    await frame.evaluate(() => {
+      const el = document.querySelector("div.ct-input-manager div[tabindex='0']") as HTMLElement | null;
+      el?.focus();
+    });
+  }
+
   await page.waitForTimeout(500);
 
-  // Write content to clipboard then paste — instant regardless of content length
+  // Paste content
   await page.evaluate(async (text) => { await navigator.clipboard.writeText(text); }, content);
   await page.waitForTimeout(300);
   await page.keyboard.press("Control+v");

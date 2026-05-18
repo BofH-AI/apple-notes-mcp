@@ -281,6 +281,32 @@ process.on("SIGTERM", () => browser.close().finally(() => process.exit(0)));
 async function main() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
+  // Pre-warm: launch the browser immediately so the first tool call doesn't hit a cold start.
+  setTimeout(() => {
+    browser.withLock(() =>
+      browser.navigateToNotes().catch((e) =>
+        process.stderr.write(`[apple-notes] pre-warm error: ${e}\n`)
+      )
+    );
+  }, 500);
+
+  // Keep-alive: every 2 minutes bring the page to front to prevent Chrome from throttling
+  // the iCloud Notes SPA when the window is idle/backgrounded.
+  setInterval(() => {
+    if (!browser.isRunning) return;
+    browser.withLock(async () => {
+      try {
+        const page = await browser.getPage();
+        if (!page.isClosed()) {
+          await page.bringToFront();
+          process.stderr.write("[apple-notes] keep-alive ping\n");
+        }
+      } catch {
+        // ignore — browser may have been closed
+      }
+    });
+  }, 2 * 60 * 1000);
 }
 
 main().catch((err) => {
