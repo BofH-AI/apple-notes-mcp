@@ -527,26 +527,47 @@ async function clickNoteEval(
     }
   }
 
-  // Match by title — scroll through the list until found
+  // Match by title — scroll the list from the top and only click in-viewport items.
+  // iCloud marks off-screen virtual list nodes with class "off-screen"; clicking them
+  // fails even with force:true because they are positioned outside the viewport.
   const lower = titleOrIndex.toLowerCase();
   log(`clickNoteEval() searching for "${lower}" by scrolling`);
-  for (let pass = 0; pass < 80; pass++) {
-    const titleEls = await frame.locator("div.note-list-item-title").all();
-    for (const titleEl of titleEls) {
-      const text = (await titleEl.textContent()) ?? "";
-      if (text.toLowerCase().includes(lower)) {
-        log(`clickNoteEval() found match "${text}" on pass ${pass}`);
-        // Click the list-item container (not just the title) — iCloud's handler is on the parent
-        const listItem = frame.locator("div.list-item").filter({
-          has: frame.locator("div.note-list-item-title").filter({ hasText: text.trim() })
-        }).first();
-        const target = (await listItem.count()) > 0 ? listItem : titleEl;
-        log(`clickNoteEval() clicking ${(await listItem.count()) > 0 ? "div.list-item" : "div.note-list-item-title"}`);
-        await target.click({ timeout: 8_000, force: true });
-        return { ok: true };
-      }
+
+  // Always start from the top so "is-first" items are in view
+  await frame.evaluate(() => {
+    const anchor = document.querySelector("div.note-list-item-title");
+    let el = anchor?.parentElement ?? null;
+    let best: HTMLElement | null = null, max = 0;
+    while (el && el !== document.body) {
+      const d = el.scrollHeight - el.clientHeight;
+      if (d > max) { max = d; best = el; }
+      el = el.parentElement;
     }
-    // Scroll to load more
+    if (best) best.scrollTop = 0;
+  });
+  await frame.waitForTimeout(400);
+
+  for (let pass = 0; pass < 80; pass++) {
+    // Only consider list items currently rendered in the viewport (no off-screen class)
+    const matchText: string | null = await frame.evaluate((lwr) => {
+      for (const item of document.querySelectorAll("div.list-item:not(.off-screen)")) {
+        const title = item.querySelector("div.note-list-item-title")?.textContent?.trim() ?? "";
+        if (title.toLowerCase().includes(lwr)) return title;
+      }
+      return null;
+    }, lower);
+
+    if (matchText !== null) {
+      log(`clickNoteEval() found in-viewport match "${matchText}" on pass ${pass}`);
+      const target = frame.locator("div.list-item:not(.off-screen)").filter({
+        has: frame.locator("div.note-list-item-title").filter({ hasText: matchText.trim() })
+      }).first();
+      log(`clickNoteEval() clicking div.list-item:not(.off-screen)`);
+      await target.click({ timeout: 8_000 });
+      return { ok: true };
+    }
+
+    // Scroll down to reveal more items
     const scrolled = await frame.evaluate(() => {
       const anchor = document.querySelector("div.note-list-item-title");
       let el = anchor?.parentElement ?? null;
