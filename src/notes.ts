@@ -467,33 +467,70 @@ export async function searchNotes(query: string): Promise<NoteListItem[]> {
 
 export async function deleteNote(titleOrIndex: string | number): Promise<string> {
   const frame = await requireFrame();
+  const page = frame.page();
+  log(`deleteNote() start`);
 
+  // Click All iCloud folder so the full list is visible
+  try {
+    await frame.locator("div.folder-list-item-row").first().waitFor({ state: "visible", timeout: 8_000 });
+    await frame.locator("div.folder-list-item-row").first().click();
+    await frame.waitForTimeout(1500);
+  } catch (e) {
+    log(`deleteNote() folder click failed: ${e}`);
+  }
+
+  const prevUrl = page.url();
   const clicked = await clickNoteEval(frame, titleOrIndex);
   if (!clicked.ok) throw new Error(clicked.error);
 
-  await frame.waitForTimeout(800);
+  // Wait for the note to open in the canvas
+  await page.waitForFunction(
+    (prev: string) => window.location.href !== prev,
+    prevUrl,
+    { timeout: 10_000 }
+  ).catch(() => log("deleteNote() URL didn't change, proceeding anyway"));
+  log(`deleteNote() note URL: ${page.url()}`);
 
-  const deleted = await frame.evaluate(() => {
-    const btn = document.querySelector(
-      'button[aria-label*="Delete"], button[title*="Delete"], [class*="delete"]'
-    ) as HTMLElement | null;
-    if (!btn) return false;
-    btn.click();
-    return true;
-  });
+  await page.waitForTimeout(1500);
 
-  if (!deleted) throw new Error("Delete button not found. Delete manually in the browser.");
+  // Try trusted click on a visible toolbar delete/trash button
+  const deleteBtn = frame.locator(
+    'button[aria-label*="Delete"], button[title*="Delete"], button[aria-label*="Trash"], button[title*="Trash"]'
+  ).first();
+
+  const btnVisible = await deleteBtn.isVisible().catch(() => false);
+  if (btnVisible) {
+    log(`deleteNote() clicking toolbar delete button`);
+    await deleteBtn.click();
+  } else {
+    // Fallback: right-click the selected list item for context menu
+    log(`deleteNote() toolbar button not found, trying right-click context menu`);
+    const selectedItem = frame.locator("div.list-item.is-selected, div.list-item.cw-selected").first();
+    await selectedItem.click({ button: "right" });
+    await frame.waitForTimeout(500);
+
+    const deleteMenuItem = frame.locator(
+      '[role="menuitem"]:has-text("Delete"), [role="menuitem"]:has-text("Trash"), li:has-text("Delete Note")'
+    ).first();
+    const menuVisible = await deleteMenuItem.isVisible().catch(() => false);
+    if (!menuVisible) {
+      throw new Error("Delete option not found in toolbar or context menu. Delete the note manually in the browser.");
+    }
+    log(`deleteNote() clicking context menu delete`);
+    await deleteMenuItem.click();
+  }
 
   // Confirm dialog if it appears
   try {
     const confirmBtn = frame.locator('button:has-text("Delete"), button:has-text("Move to Trash")').first();
     await confirmBtn.waitFor({ timeout: 3000 });
+    log(`deleteNote() confirming delete dialog`);
     await confirmBtn.click();
   } catch {
-    // no dialog
+    log(`deleteNote() no confirm dialog`);
   }
 
-  await frame.waitForTimeout(1000);
+  await page.waitForTimeout(1000);
   return "Note deleted.";
 }
 
