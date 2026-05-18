@@ -2,3 +2,5 @@ node_modules/
 dist/
 debug.log
 *.log
+.claude/
+browser-profile/

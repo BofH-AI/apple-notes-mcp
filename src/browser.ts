@@ -4,7 +4,7 @@ import { mkdirSync } from "fs";
 import { log, logError } from "./log.js";
 
 const PROFILE_DIR = join(
-  process.env.APPDATA ?? join(process.env.USERPROFILE ?? "C:\\Users\\Default", "AppData", "Roaming"),
+  process.env.APPDATA ?? join(process.env.USERPROFILE ?? process.env.HOMEPATH ?? "C:\\", "AppData", "Roaming"),
   "apple-notes-mcp",
   "browser-profile"
 );
