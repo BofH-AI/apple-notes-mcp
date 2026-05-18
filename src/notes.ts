@@ -501,7 +501,12 @@ export async function deleteNote(titleOrIndex: string | number): Promise<string>
   const btnVisible = await deleteBtn.isVisible().catch(() => false);
   if (btnVisible) {
     log(`deleteNote() clicking toolbar delete button`);
-    await deleteBtn.click();
+    const dbbox = await deleteBtn.boundingBox();
+    if (dbbox) {
+      await page.mouse.click(dbbox.x + dbbox.width / 2, dbbox.y + dbbox.height / 2);
+    } else {
+      await deleteBtn.click();
+    }
   } else {
     // Fallback: right-click the selected list item for context menu
     log(`deleteNote() toolbar button not found, trying right-click context menu`);
@@ -520,12 +525,17 @@ export async function deleteNote(titleOrIndex: string | number): Promise<string>
     await deleteMenuItem.click();
   }
 
-  // Confirm dialog if it appears
+  // Confirm dialog if it appears — use mouse.click() to avoid viewport bounds rejection
   try {
     const confirmBtn = frame.locator('button:has-text("Delete"), button:has-text("Move to Trash")').first();
     await confirmBtn.waitFor({ timeout: 3000 });
     log(`deleteNote() confirming delete dialog`);
-    await confirmBtn.click();
+    const cbbox = await confirmBtn.boundingBox();
+    if (cbbox) {
+      await page.mouse.click(cbbox.x + cbbox.width / 2, cbbox.y + cbbox.height / 2);
+    } else {
+      await confirmBtn.click({ timeout: 5_000 });
+    }
   } catch {
     log(`deleteNote() no confirm dialog`);
   }
@@ -613,31 +623,39 @@ async function clickNoteEval(
   });
   await frame.waitForTimeout(400);
 
+  // Get the iframe's position on the page once — needed to convert frame-relative
+  // getBoundingClientRect() coords into page coords for page.mouse.click().
+  const iframeEl = await frame.frameElement();
+  const iframeBBox = await iframeEl.boundingBox();
+  const iframeX = iframeBBox?.x ?? 0;
+  const iframeY = iframeBBox?.y ?? 0;
+  log(`clickNoteEval() iframe offset (${iframeX.toFixed(0)}, ${iframeY.toFixed(0)})`);
+
   for (let pass = 0; pass < 80; pass++) {
-    // Only consider list items currently rendered in the viewport (no off-screen class)
-    const matchText: string | null = await frame.evaluate((lwr) => {
-      for (const item of document.querySelectorAll("div.list-item:not(.off-screen)")) {
-        const title = item.querySelector("div.note-list-item-title")?.textContent?.trim() ?? "";
-        if (title.toLowerCase().includes(lwr)) return title;
+    // Use getBoundingClientRect() inside the frame to find items that are genuinely
+    // visible in the iframe viewport — class-based filters like :not(.off-screen) are
+    // unreliable because iCloud also uses large negative CSS coordinates to hide items.
+    const match: { text: string; cx: number; cy: number } | null = await frame.evaluate((lwr) => {
+      const vh = window.innerHeight;
+      const vw = window.innerWidth;
+      for (const item of document.querySelectorAll("div.list-item")) {
+        const titleEl = item.querySelector("div.note-list-item-title");
+        if (!titleEl) continue;
+        const text = titleEl.textContent?.trim() ?? "";
+        if (!text.toLowerCase().includes(lwr)) continue;
+        const rect = item.getBoundingClientRect();
+        if (rect.top >= 0 && rect.bottom <= vh && rect.left >= 0 && rect.right <= vw && rect.width > 0) {
+          return { text, cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 };
+        }
       }
       return null;
     }, lower);
 
-    if (matchText !== null) {
-      log(`clickNoteEval() found in-viewport match "${matchText}" on pass ${pass}`);
-      const target = frame.locator("div.list-item:not(.off-screen)").filter({
-        has: frame.locator("div.note-list-item-title").filter({ hasText: matchText.trim() })
-      }).first();
-      // Use page.mouse.click() via boundingBox — bypasses Playwright's viewport bounds check
-      // which rejects elements iCloud's virtual list positions with CSS outside the viewport.
-      const bbox = await target.boundingBox();
-      if (bbox) {
-        log(`clickNoteEval() mouse.click at (${(bbox.x + bbox.width / 2).toFixed(0)}, ${(bbox.y + bbox.height / 2).toFixed(0)})`);
-        await frame.page().mouse.click(bbox.x + bbox.width / 2, bbox.y + bbox.height / 2);
-      } else {
-        log(`clickNoteEval() boundingBox null, fallback locator.click`);
-        await target.click({ timeout: 8_000 });
-      }
+    if (match !== null) {
+      const pageX = iframeX + match.cx;
+      const pageY = iframeY + match.cy;
+      log(`clickNoteEval() found visible match "${match.text}" on pass ${pass}, mouse.click at page (${pageX.toFixed(0)}, ${pageY.toFixed(0)})`);
+      await frame.page().mouse.click(pageX, pageY);
       return { ok: true };
     }
 
