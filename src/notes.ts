@@ -290,6 +290,9 @@ export async function createNote(content: string): Promise<string> {
   const frame = await requireFrame();
   const page = frame.page();
 
+  // Capture URL before clicking so the waitForFunction race is avoided
+  const prevUrl = page.url();
+
   // Try trusted click on the compose/new-note button (class confirmed: "compose cw-button")
   const newNoteBtn = frame.locator(
     '[class*="compose"][class*="cw-button"], button[title*="Create a note"], button[aria-label*="New Note"], [class*="new-note"]'
@@ -300,15 +303,13 @@ export async function createNote(content: string): Promise<string> {
     log("createNote() clicking New Note button");
     await newNoteBtn.click();
   } else {
-    // Fallback: click note list area then Ctrl+N
     log("createNote() button not found, clicking note list then Ctrl+N");
     await frame.locator("div.note-list-item-title").first().click().catch(() => {});
     await page.waitForTimeout(500);
     await page.keyboard.press("Control+n");
   }
 
-  // Wait for a new empty note to open (URL changes to new note)
-  const prevUrl = page.url();
+  // Wait for URL to change to the new note
   await page.waitForFunction(
     (prev: string) => window.location.href !== prev,
     prevUrl,
@@ -317,22 +318,25 @@ export async function createNote(content: string): Promise<string> {
   log(`createNote() URL after new note: ${page.url()}`);
 
   // Give the canvas editor time to initialize for the new note
-  await page.waitForTimeout(2000);
+  await page.waitForTimeout(3000);
 
-  // Focus the editor via trusted click on its center
+  // Click editor center to focus the canvas (same approach as getNote/updateNote)
   const editorBBox = await frame.locator("div.notes-note-editor-view-controller").boundingBox();
   if (editorBBox && editorBBox.width > 0) {
     const cx = editorBBox.x + editorBBox.width / 2;
-    const cy = editorBBox.y + editorBBox.height * 0.25; // click upper portion for title area
-    log(`createNote() clicking editor at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
+    const cy = editorBBox.y + editorBBox.height / 2;
+    log(`createNote() clicking editor center at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
     await page.mouse.click(cx, cy);
   }
+
+  // Wait for click to register before pasting (same gap used in getNote)
+  await page.waitForTimeout(500);
 
   // Write content to clipboard then paste — instant regardless of content length
   await page.evaluate(async (text) => { await navigator.clipboard.writeText(text); }, content);
   await page.waitForTimeout(300);
   await page.keyboard.press("Control+v");
-  await page.waitForTimeout(1500);
+  await page.waitForTimeout(2000);
 
   return `Note created: "${content.split("\n")[0].trim()}"`;
 }
