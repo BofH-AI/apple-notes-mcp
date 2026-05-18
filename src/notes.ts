@@ -579,7 +579,13 @@ async function clickNoteEval(
       if (!scrolled) { log(`clickNoteEval() at bottom after ${i} passes`); break; }
     }
     try {
-      await frame.locator("div.list-item").nth(titleOrIndex).click({ timeout: 8_000, force: true });
+      const indexTarget = frame.locator("div.list-item").nth(titleOrIndex);
+      const bbox = await indexTarget.boundingBox();
+      if (bbox) {
+        await frame.page().mouse.click(bbox.x + bbox.width / 2, bbox.y + bbox.height / 2);
+      } else {
+        await indexTarget.click({ timeout: 8_000, force: true });
+      }
       return { ok: true };
     } catch {
       const count = await frame.locator("div.list-item").count();
@@ -622,8 +628,16 @@ async function clickNoteEval(
       const target = frame.locator("div.list-item:not(.off-screen)").filter({
         has: frame.locator("div.note-list-item-title").filter({ hasText: matchText.trim() })
       }).first();
-      log(`clickNoteEval() clicking div.list-item:not(.off-screen)`);
-      await target.click({ timeout: 8_000 });
+      // Use page.mouse.click() via boundingBox — bypasses Playwright's viewport bounds check
+      // which rejects elements iCloud's virtual list positions with CSS outside the viewport.
+      const bbox = await target.boundingBox();
+      if (bbox) {
+        log(`clickNoteEval() mouse.click at (${(bbox.x + bbox.width / 2).toFixed(0)}, ${(bbox.y + bbox.height / 2).toFixed(0)})`);
+        await frame.page().mouse.click(bbox.x + bbox.width / 2, bbox.y + bbox.height / 2);
+      } else {
+        log(`clickNoteEval() boundingBox null, fallback locator.click`);
+        await target.click({ timeout: 8_000 });
+      }
       return { ok: true };
     }
 
