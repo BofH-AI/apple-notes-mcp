@@ -291,15 +291,15 @@ async function main() {
     );
   }, 500);
 
-  // Keep-alive: every 2 minutes bring the page to front to prevent Chrome from throttling
-  // the iCloud Notes SPA when the window is idle/backgrounded.
+  // Keep-alive: every 2 minutes run a silent JS eval to prevent Chrome from throttling
+  // the backgrounded iCloud Notes SPA. Does NOT call bringToFront — no focus stealing.
   setInterval(() => {
     if (!browser.isRunning) return;
     browser.withLock(async () => {
       try {
         const page = await browser.getPage();
         if (!page.isClosed()) {
-          await page.bringToFront();
+          await page.evaluate(() => document.title);
           process.stderr.write("[apple-notes] keep-alive ping\n");
         }
       } catch {
