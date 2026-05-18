@@ -320,12 +320,13 @@ export async function createNote(content: string): Promise<string> {
   // Give the canvas editor time to initialize for the new note
   await page.waitForTimeout(3000);
 
-  // Click editor center to focus the canvas (same approach as getNote/updateNote)
+  // Click the title area (top 25%) of the editor — for a new empty note, iCloud places
+  // the canvas cursor in the title area, not the body. Clicking center misses the focused area.
   const editorBBox = await frame.locator("div.notes-note-editor-view-controller").boundingBox();
   if (editorBBox && editorBBox.width > 0) {
     const cx = editorBBox.x + editorBBox.width / 2;
-    const cy = editorBBox.y + editorBBox.height / 2;
-    log(`createNote() clicking editor center at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
+    const cy = editorBBox.y + editorBBox.height * 0.15;
+    log(`createNote() clicking editor title area at (${cx.toFixed(0)}, ${cy.toFixed(0)})`);
     await page.mouse.click(cx, cy);
   }
 
